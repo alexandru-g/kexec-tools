@@ -258,7 +258,7 @@ int atag_arm_load(struct kexec_info *info, unsigned long base,
 
 #define DTB_MAGIC               0xedfe0dd0
 #define DTB_OFFSET              0x2C
-#define DTB_PAD_SIZE            1024
+#define DTB_PAD_SIZE            32768
 #define INVALID_SOC_REV_ID 0xFFFFFFFF
 
 struct msm_id
@@ -297,8 +297,8 @@ static uint32_t dtb_compatible(void *dtb, struct msm_id *devid, struct msm_id *d
 	dtb_id->soc_rev = fdt32_to_cpu(((const struct msm_id *)prop)->soc_rev);
 	dtb_id->board_rev = fdt32_to_cpu(((const struct msm_id *)prop)->board_rev);
 
-	//printf("DTB: found dtb platform %u hw %u soc 0x%x board %u\n",
-	//		dtb_id->platform_id, dtb_id->hardware_id, dtb_id->soc_rev, dtb_id->board_rev);
+	// printf("DTB: found dtb platform %u hw %u soc 0x%x board %u\n",
+			// dtb_id->platform_id, dtb_id->hardware_id, dtb_id->soc_rev, dtb_id->board_rev);
 
 	if (dtb_id->platform_id != devid->platform_id ||
 		dtb_id->hardware_id != devid->hardware_id) {
@@ -382,7 +382,7 @@ static int load_dtb_image(const char *path, char **dtb_img, off_t *dtb_img_len)
 	return 1;
 }
 
-static int choose_dtb(const char *dtb_img, off_t dtb_len, char **dtb_buf, off_t *dtb_length)
+static int choose_dtb(const char *dtb_img, off_t dtb_len, char **dtb_buf, off_t *dtb_length, char *target_model)
 {
 	char *dtb = (char*)dtb_img;
 	char *dtb_end = dtb + dtb_len;
@@ -392,6 +392,14 @@ static int choose_dtb(const char *dtb_img, off_t dtb_len, char **dtb_buf, off_t 
 	uint32_t bestmatch_tag_size;
 	uint32_t bestmatch_soc_rev_id = INVALID_SOC_REV_ID;
 	uint32_t bestmatch_board_rev_id = INVALID_SOC_REV_ID;
+
+	char *dtb_buf_test;
+	const char *model;
+	int modelsize, off;
+
+	if (target_model) {
+		printf("DTB: searching for model %s\n", target_model);
+	}
 
 	f = fopen("/proc/device-tree/qcom,msm-id", "r");
 	if(!f)
@@ -439,7 +447,31 @@ static int choose_dtb(const char *dtb_img, off_t dtb_len, char **dtb_buf, off_t 
 				printf("DTB: match 0x%x %u, my id 0x%x %u, len %u\n",
 						dtb_id.soc_rev, dtb_id.board_rev,
 						devid.soc_rev, devid.board_rev, dtb_size);
-				return 1;
+
+				if (target_model) {
+					//test dtb model
+					dtb_buf_test = xmalloc(dtb_size);
+					memcpy(dtb_buf_test, dtb, dtb_size);
+					off = fdt_open_into(dtb_buf_test, dtb_buf_test, dtb_size);
+					if(off)
+						die("DTB: fdt_open_into failed %d\n", off);
+
+					model = fdt_getprop(dtb_buf_test, 0, "model", &modelsize);
+					printf("DTB: found model %s\n", model);
+					
+					//if first hit or we are searching for a specific model
+					if (!strcmp(target_model, model)) {
+						printf("DTB: Bingo!\n", model);
+						free(dtb_buf_test);
+						return 1;
+					}
+					else {
+						free(dtb_buf_test);
+					}
+				}
+				else {
+					return 1;
+				}
 			}
 			else if(dtb_id.soc_rev <= devid.soc_rev &&
 					dtb_id.board_rev < devid.board_rev)
@@ -499,6 +531,105 @@ int dtb_add_memory_reg(void *dtb_buf, int off)
 	fclose(f);
 	return 1;
 }
+
+//htc m8
+const char *chosenConfigProps[][6] = { "bootloaderflag", "kernelflag", 
+			"radioflag", "radioflag_ex2", "debugflag", "radioflag_ex1"};
+
+int dtb_add_htc_projectid(void *dtb_buf, int off)
+{
+	FILE *f;
+	uint32_t reg;
+	int res;
+
+	f = fopen("/proc/device-tree/htc,project-id", "r");
+	if(!f)
+	{
+		fprintf(stderr, "DTB: Failed to open /proc/device-tree/htc,project-id!\n");
+		return 0;
+	}
+
+	fdt_delprop(dtb_buf, off, "htc,project-id");
+
+	while(fread(&reg, sizeof(reg), 1, f) == 1)
+		fdt_appendprop(dtb_buf, off, "htc,project-id", &reg, sizeof(reg));
+
+	fclose(f);
+	return 1;
+}
+
+int dtb_add_property(void *dtb_buf, int off, char *path, char *property)
+{
+	FILE *f;
+	uint32_t reg;
+	int res;
+
+	char proppath[250];
+	sprintf(proppath, "/proc/device-tree/%s/%s", path, property);
+
+	f = fopen(proppath, "r");
+	if(!f)
+	{
+		fprintf(stderr, "DTB: Failed to open %s!\n", proppath);
+		return 0;
+	}
+
+	while(fread(&reg, sizeof(reg), 1, f) == 1)
+		fdt_appendprop(dtb_buf, off, property, &reg, sizeof(reg));
+
+	fclose(f);
+	return 1;
+}
+
+int dtb_add_properties_recursive(void *dtb_buf, int off, char *path, char **properties, int nrprops)
+{
+	int i, ret;
+
+	for (i = 0; i < nrprops; i++) {
+		ret = dtb_add_property(dtb_buf, off, path, properties[i]);
+		if (!ret) {
+			return ret;
+		}
+	}
+	return 1;
+}
+
+int dtb_add_htc_m8_specific(void *dtb_buf)
+{
+	int ret, off;
+	char **configProperties = chosenConfigProps;
+
+	printf("DTB: adding HTC M8 specific\n");
+
+	//chosen/config
+	ret = off = fdt_path_offset(dtb_buf, "/chosen");
+	if (ret == -FDT_ERR_NOTFOUND) {
+		ret = fdt_add_subnode(dtb_buf, ret, "/chosen");
+	}
+
+	if (ret < 0) {
+		fprintf(stderr, "DTB: Error adding /chosen node.\n");
+		return -1;
+	}
+
+	ret = fdt_path_offset(dtb_buf, "/chosen/config");
+	if (ret == -FDT_ERR_NOTFOUND) {
+		ret = fdt_add_subnode(dtb_buf, off, "config");
+	}
+
+	if (ret < 0) {
+		fprintf(stderr, "DTB: Error adding /chosen/config node.\n");
+		return -1;
+	}
+	dtb_add_properties_recursive(dtb_buf, ret, "chosen/config", configProperties, 6);
+
+	//htc projid
+	ret = fdt_path_offset(dtb_buf, "/");
+	dtb_add_htc_projectid(dtb_buf, ret);
+
+	return 0;
+}
+//end htc m8
 
 int zImage_arm_load(int argc, char **argv, const char *buf, off_t len,
 	struct kexec_info *info)
@@ -593,6 +724,7 @@ int zImage_arm_load(int argc, char **argv, const char *buf, off_t len,
 		if (command_line_len > COMMAND_LINE_SIZE)
 			command_line_len = COMMAND_LINE_SIZE;
 	}
+	
 	if (ramdisk) {
 		ramdisk_buf = slurp_file(ramdisk, &initrd_size);
 	}
@@ -679,7 +811,7 @@ int zImage_arm_load(int argc, char **argv, const char *buf, off_t len,
 			printf("DTB: Using DTB appended to zImage\n");
 		}
 
-		choose_res = choose_dtb(dtb_img, dtb_img_len, &dtb_buf, &dtb_length);
+		choose_res = choose_dtb(dtb_img, dtb_img_len, &dtb_buf, &dtb_length, "M8 XF");
 
 		if(free_dtb_img)
 			free(dtb_img);
@@ -687,6 +819,7 @@ int zImage_arm_load(int argc, char **argv, const char *buf, off_t len,
 		if(choose_res)
 		{
 			int ret, off;
+			int err;
 
 			dtb_length = fdt_totalsize(dtb_buf) + DTB_PAD_SIZE;
 			dtb_buf = xrealloc(dtb_buf, dtb_length);
@@ -709,16 +842,17 @@ int zImage_arm_load(int argc, char **argv, const char *buf, off_t len,
 
 				if (off == -FDT_ERR_NOTFOUND)
 					off = fdt_add_subnode(dtb_buf, off, node_name);
+    
 
 				if (off < 0) {
 					fprintf(stderr, "DTB: Error adding %s node.\n", node_name);
 					return -1;
 				}
 
-				if (fdt_setprop(dtb_buf, off, prop_name,
+				if (err = fdt_setprop(dtb_buf, off, prop_name,
 						command_line, strlen(command_line) + 1) != 0) {
-					fprintf(stderr, "DTB: Error setting %s/%s property.\n",
-						node_name, prop_name);
+					fprintf(stderr, "DTB: Error setting %s/%s property. Error %d\n",
+						node_name, prop_name, err);
 					return -1;
 				}
 			}
@@ -748,8 +882,14 @@ int zImage_arm_load(int argc, char **argv, const char *buf, off_t len,
 
 				ret = fdt_setprop(dtb_buf, off, "linux,initrd-end", &initrd_end, sizeof(initrd_end));
 				if (ret)
-					die("DTB: Error setting %s/linux,initrd-end property.\n", node_name);
+					die("DTB: Error setting %s/linux,initrd-end property. Error is %d\n", node_name, ret);
 			}
+
+			//alexg
+			if (dtb_add_htc_m8_specific(dtb_buf) != 0) {
+				return -1;
+			}
+			//end alexg
 
 			fdt_pack(dtb_buf);
 		}
