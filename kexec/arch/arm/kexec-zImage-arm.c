@@ -535,6 +535,12 @@ int dtb_add_memory_reg(void *dtb_buf, int off)
 //htc m8
 const char *chosenConfigProps[][6] = { "bootloaderflag", "kernelflag", 
 			"radioflag", "radioflag_ex2", "debugflag", "radioflag_ex1"};
+// const char *calibrationProps[][13] = { "als_flash", "bs_flash", "bt_flash",
+// 			"c-sensor", "cam_awb", "g-sensor", "gs_flash", "gyro_flash",
+// 			"p-sensor", "ps_adi_flash", "ps_flash", "wifi_eeprom",
+// 			"ws_flash"};
+// const char *htc_workaround_reserve_leading_pagesProps[2] = { "compatible",
+// 			"qcom,memblock-reserve"};
 
 int dtb_add_htc_projectid(void *dtb_buf, int off)
 {
@@ -601,7 +607,21 @@ int dtb_add_htc_m8_specific(void *dtb_buf)
 
 	printf("DTB: adding HTC M8 specific\n");
 
+	//calibration_data
+	// printf("DTB: HTC M8: adding calibration data\n");
+	// ret = fdt_path_offset(dtb_buf, "/calibration_data");
+	// if (ret == -FDT_ERR_NOTFOUND) {
+	// 	ret = fdt_add_subnode(dtb_buf, 0, "/calibration_data");
+	// }
+
+	// if (ret < 0) {
+	// 	fprintf(stderr, "DTB: Error adding /calibration_data node.\n");
+	// 	return -1;
+	// }
+	// dtb_add_properties_recursive(dtb_buf, ret, "calibration_data", calibrationProps, 13);
+
 	//chosen/config
+	printf("DTB: HTC M8: adding chosen/config\n");
 	ret = off = fdt_path_offset(dtb_buf, "/chosen");
 	if (ret == -FDT_ERR_NOTFOUND) {
 		ret = fdt_add_subnode(dtb_buf, ret, "/chosen");
@@ -624,8 +644,23 @@ int dtb_add_htc_m8_specific(void *dtb_buf)
 	dtb_add_properties_recursive(dtb_buf, ret, "chosen/config", configProperties, 6);
 
 	//htc projid
+	printf("DTB: HTC M8: adding htc,project-id\n");
 	ret = fdt_path_offset(dtb_buf, "/");
 	dtb_add_htc_projectid(dtb_buf, ret);
+
+	//htc_workaround_reserve_leading_pages
+	// printf("DTB: HTC M8: adding htc_workaround_reserve_leading_pages\n");
+	// ret = fdt_path_offset(dtb_buf, "/htc_workaround_reserve_leading_pages");
+	// if (ret == -FDT_ERR_NOTFOUND) {
+	// 	ret = fdt_add_subnode(dtb_buf, 0, "/htc_workaround_reserve_leading_pages");
+	// }
+
+	// if (ret < 0) {
+	// 	fprintf(stderr, "DTB: Error adding /htc_workaround_reserve_leading_pages node.\n");
+	// 	return -1;
+	// }
+	// dtb_add_properties_recursive(dtb_buf, ret, "htc_workaround_reserve_leading_pages", 
+	// 	htc_workaround_reserve_leading_pagesProps, 2);
 
 	return 0;
 }
